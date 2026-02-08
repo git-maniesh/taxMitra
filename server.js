@@ -9,7 +9,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware - High limit for base64 image payloads (25MB to be safe for uncompressed flows)
+// Middleware - High limit for base64 image payloads
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: true }));
@@ -19,18 +19,17 @@ const MONGO_URL = process.env.MONGO_URL;
 
 if (!MONGO_URL) {
   console.error('❌ FATAL: MONGO_URL is not defined in the environment variables.');
-  process.exit(1);
+  // In serverless, we don't process.exit(1), but we log the error.
+} else {
+  mongoose.connect(MONGO_URL)
+    .then(() => {
+      console.log('✅ Connected to MongoDB Atlas Cloud');
+      seedAdmin();
+    })
+    .catch(err => {
+      console.error('❌ MongoDB Connection Error. Check your environment configuration.');
+    });
 }
-
-mongoose.connect(MONGO_URL)
-  .then(() => {
-    console.log('✅ Connected to MongoDB Atlas Cloud');
-    seedAdmin();
-  })
-  .catch(err => {
-    // Log minimal error to prevent string leakage in logs
-    console.error('❌ MongoDB Connection Error. Check your environment configuration.');
-  });
 
 // --- Database Schemas ---
 
@@ -107,38 +106,40 @@ const Review = mongoose.model('Review', ReviewSchema);
 // --- Admin Seeder ---
 async function seedAdmin() {
   const adminEmail = 'adminme@gmail.com';
-  const existing = await User.findOne({ email: adminEmail });
-  if (!existing) {
-    const admin = new User({
-      id: 'admin-001',
-      name: 'Super Admin',
-      email: adminEmail,
-      phone: '0000000000',
-      role: 'ADMIN',
-      adminRole: 'SUPER',
-      avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=AdminManish',
-      isEmailVerified: true
-    });
-    await admin.save();
-    console.log('👑 Super Admin seeded to MongoDB');
-  }
+  try {
+    const existing = await User.findOne({ email: adminEmail });
+    if (!existing) {
+      const admin = new User({
+        id: 'admin-001',
+        name: 'Super Admin',
+        email: adminEmail,
+        phone: '0000000000',
+        role: 'ADMIN',
+        adminRole: 'SUPER',
+        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=AdminManish',
+        isEmailVerified: true
+      });
+      await admin.save();
+      console.log('👑 Super Admin seeded to MongoDB');
+    }
+  } catch (e) {}
 }
 
 // --- API Routes ---
 
-app.get('/health', (req, res) => res.json({ 
+app.get('/api/health', (req, res) => res.json({ 
   status: 'ok', 
   database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' 
 }));
 
-app.get('/users', async (req, res) => {
+app.get('/api/users', async (req, res) => {
   try {
     const users = await User.find();
     res.json(users);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/users/:id', async (req, res) => {
+app.get('/api/users/:id', async (req, res) => {
   try {
     const user = await User.findOne({ id: req.params.id });
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -146,7 +147,7 @@ app.get('/users/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/users', async (req, res) => {
+app.post('/api/users', async (req, res) => {
   try {
     const { id, email } = req.body;
     const user = await User.findOneAndUpdate(
@@ -158,21 +159,21 @@ app.post('/users', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/users/:id', async (req, res) => {
+app.patch('/api/users/:id', async (req, res) => {
   try {
     const user = await User.findOneAndUpdate({ id: req.params.id }, req.body, { new: true });
     res.json(user);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/profiles', async (req, res) => {
+app.get('/api/profiles', async (req, res) => {
   try {
     const profiles = await Profile.find();
     res.json(profiles);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/profiles/:id', async (req, res) => {
+app.get('/api/profiles/:id', async (req, res) => {
   try {
     const profile = await Profile.findOne({ id: req.params.id });
     if (!profile) return res.status(404).json({ error: 'Profile not found' });
@@ -180,7 +181,7 @@ app.get('/profiles/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/profiles', async (req, res) => {
+app.post('/api/profiles', async (req, res) => {
   try {
     const { id } = req.body;
     const profile = await Profile.findOneAndUpdate({ id }, req.body, { upsert: true, new: true });
@@ -188,14 +189,14 @@ app.post('/profiles', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/profiles/:id', async (req, res) => {
+app.patch('/api/profiles/:id', async (req, res) => {
   try {
     const profile = await Profile.findOneAndUpdate({ id: req.params.id }, req.body, { new: true });
     res.json(profile);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/messages/:userId', async (req, res) => {
+app.get('/api/messages/:userId', async (req, res) => {
   try {
     const messages = await Message.find({
       $or: [{ senderId: req.params.userId }, { receiverId: req.params.userId }]
@@ -204,7 +205,7 @@ app.get('/messages/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/messages', async (req, res) => {
+app.post('/api/messages', async (req, res) => {
   try {
     const message = new Message(req.body);
     await message.save();
@@ -212,7 +213,7 @@ app.post('/messages', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/messages/read', async (req, res) => {
+app.patch('/api/messages/read', async (req, res) => {
   try {
     const { userId, contactId } = req.body;
     await Message.updateMany(
@@ -223,14 +224,14 @@ app.patch('/messages/read', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/reviews/:caId', async (req, res) => {
+app.get('/api/reviews/:caId', async (req, res) => {
   try {
     const reviews = await Review.find({ caId: req.params.caId });
     res.json(reviews);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/nearby', async (req, res) => {
+app.get('/api/nearby', async (req, res) => {
   try {
     const { lat, lon } = req.query;
     if (!lat || !lon) return res.status(400).json({ error: 'Coordinates missing' });
@@ -248,8 +249,12 @@ app.get('/nearby', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.use((req, res) => res.status(404).json({ error: 'API Route Not Found' }));
+// Handle standard listening for local development
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Local API Server active on http://localhost:${PORT}`);
+  });
+}
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 API Server active on http://0.0.0.0:${PORT}`);
-});
+// Export the app for Vercel
+export default app;

@@ -27,38 +27,53 @@ const AuthPage: React.FC<{ mode: 'login' | 'register' }> = ({ mode }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
+    
     setIsLoading(true);
 
-    await new Promise(r => setTimeout(r, 800));
+    try {
+      // Small artificial delay for UX feel
+      await new Promise(r => setTimeout(r, 800));
 
-    if (mode === 'login') {
-      // Fixed: Awaited login Promise
-      const result = await login(email, password);
-      setIsLoading(false);
-      
-      if (result.success) {
-        const savedUserStr = localStorage.getItem('taxmitra_session_user');
-        if (savedUserStr) {
-          const savedUser = JSON.parse(savedUserStr);
-          if (savedUser.role === UserRole.ADMIN) navigate('/admin');
-          else navigate((savedUser.role === UserRole.CA || savedUser.role === UserRole.ACCOUNTANT) ? '/ca-dashboard' : '/dashboard');
+      if (mode === 'login') {
+        const result = await login(email, password);
+        
+        if (result.success) {
+          const savedUserStr = localStorage.getItem('taxmitra_session_user');
+          if (savedUserStr) {
+            const savedUser = JSON.parse(savedUserStr);
+            if (savedUser.role === UserRole.ADMIN) {
+              navigate('/admin');
+            } else {
+              navigate((savedUser.role === UserRole.CA || savedUser.role === UserRole.ACCOUNTANT) ? '/ca-dashboard' : '/dashboard');
+            }
+          }
+        } else {
+          // Failure handled inside login function (notifies user)
+          if (result.errorType === 'NOT_FOUND') {
+            notify('No account found. Redirecting to registration...', 'info');
+            navigate(`/register?email=${encodeURIComponent(email)}`);
+          }
         }
-      } else if (result.errorType === 'NOT_FOUND') {
-        notify('No account found with this email. Please sign up.', 'info');
-        navigate(`/register?email=${encodeURIComponent(email)}`);
+      } else {
+        const result = await signup(email, name, role);
+        if (result.success) {
+          if (role === UserRole.CA || role === UserRole.ACCOUNTANT) {
+            navigate('/ca-onboarding');
+          } else {
+            navigate('/dashboard');
+          }
+        } else if (result.errorType === 'ALREADY_EXISTS') {
+          notify('Account exists. Please log in.', 'info');
+          navigate(`/login?email=${encodeURIComponent(email)}`);
+        }
       }
-    } else {
-      // Fixed: Awaited signup Promise
-      const result = await signup(email, name, role);
+    } catch (err: any) {
+      console.error('Auth Error:', err);
+      notify(err.message || 'Authentication service is currently unavailable.', 'error');
+    } finally {
+      // This is critical: ensure buffering stops regardless of success or failure
       setIsLoading(false);
-      
-      if (result.success) {
-        if (role === UserRole.CA || role === UserRole.ACCOUNTANT) navigate('/ca-onboarding');
-        else navigate('/dashboard');
-      } else if (result.errorType === 'ALREADY_EXISTS') {
-        notify('An account already exists with this email. Please log in.', 'info');
-        navigate(`/login?email=${encodeURIComponent(email)}`);
-      }
     }
   };
 
@@ -110,7 +125,7 @@ const AuthPage: React.FC<{ mode: 'login' | 'register' }> = ({ mode }) => {
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-medium"
-                        placeholder="e.g. Full Name"
+                        placeholder="e.g. Manish Mehra"
                       />
                     </div>
                   </div>
@@ -207,6 +222,7 @@ const AuthPage: React.FC<{ mode: 'login' | 'register' }> = ({ mode }) => {
             <p className="text-slate-500 font-medium">
               {mode === 'login' ? "Don't have an account?" : "Already a member?"}{' '}
               <button 
+                type="button"
                 onClick={() => navigate(mode === 'login' ? '/register' : '/login')}
                 className="text-blue-600 font-black hover:underline ml-1"
               >

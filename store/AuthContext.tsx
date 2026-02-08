@@ -11,8 +11,8 @@ interface Notification {
 
 interface AuthContextType {
   user: User | null;
-  login: (email: string, password?: string) => Promise<{ success: boolean; errorType?: 'NOT_FOUND' | 'INVALID_PWD' }>;
-  signup: (email: string, name: string, role: UserRole) => Promise<{ success: boolean; errorType?: 'ALREADY_EXISTS' }>;
+  login: (email: string, password?: string) => Promise<{ success: boolean; errorType?: 'NOT_FOUND' | 'INVALID_PWD' | 'SERVER_ERROR' }>;
+  signup: (email: string, name: string, role: UserRole) => Promise<{ success: boolean; errorType?: 'ALREADY_EXISTS' | 'SERVER_ERROR' }>;
   logout: () => void;
   updateProfile: (data: Partial<User>) => Promise<void>;
   isAuthenticated: boolean;
@@ -62,90 +62,116 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const login = async (email: string, password?: string) => {
-    if (email.toLowerCase() === 'adminme@gmail.com') {
-      if (password !== 'Manish214') {
-        notify('Invalid password for admin access.', 'error');
-        return { success: false, errorType: 'INVALID_PWD' as const };
+    try {
+      // Special Handling for Super Admin
+      if (email.toLowerCase() === 'adminme@gmail.com') {
+        if (password !== 'Manish214') {
+          notify('Invalid password for admin access.', 'error');
+          return { success: false, errorType: 'INVALID_PWD' as const };
+        }
+        
+        let admin;
+        try {
+          admin = await storageService.findUserByEmail(email);
+        } catch (e) {
+          console.warn('DB lookup failed for admin, using fail-safe seeding');
+        }
+
+        if (!admin) {
+          admin = {
+            id: 'admin-001',
+            name: 'Super Admin',
+            email: 'adminme@gmail.com',
+            phone: '0000000000',
+            role: UserRole.ADMIN,
+            adminRole: AdminRole.SUPER,
+            avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=AdminManish',
+            isEmailVerified: true
+          };
+          // Try to persist but don't block login if DB is cold
+          storageService.insertOneUser(admin).catch(err => console.error('Admin seed failed', err));
+        }
+        
+        setUser(admin);
+        localStorage.setItem('taxmitra_session_user', JSON.stringify(admin));
+        notify('Admin access granted.', 'success');
+        return { success: true };
       }
-      let admin = await storageService.findUserByEmail(email);
-      if (!admin) {
-        admin = {
-          id: 'admin-001',
-          name: 'Super Admin',
-          email: 'adminme@gmail.com',
-          phone: '0000000000',
-          role: UserRole.ADMIN,
-          adminRole: AdminRole.SUPER,
-          avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=AdminManish',
-          isEmailVerified: true
-        };
-        await storageService.insertOneUser(admin);
+
+      const existingUser = await storageService.findUserByEmail(email);
+      if (!existingUser) {
+        return { success: false, errorType: 'NOT_FOUND' as const };
       }
-      setUser(admin);
-      localStorage.setItem('taxmitra_session_user', JSON.stringify(admin));
-      notify('Admin access granted.', 'success');
+
+      setUser(existingUser);
+      localStorage.setItem('taxmitra_session_user', JSON.stringify(existingUser));
+      notify(`Welcome back, ${existingUser.name}!`, 'success');
       return { success: true };
+    } catch (err) {
+      console.error('Login error:', err);
+      notify('Unable to connect to login server.', 'error');
+      return { success: false, errorType: 'SERVER_ERROR' as const };
     }
-
-    const existingUser = await storageService.findUserByEmail(email);
-    if (!existingUser) {
-      return { success: false, errorType: 'NOT_FOUND' as const };
-    }
-
-    setUser(existingUser);
-    localStorage.setItem('taxmitra_session_user', JSON.stringify(existingUser));
-    notify(`Welcome back, ${existingUser.name}!`, 'success');
-    return { success: true };
   };
 
   const signup = async (email: string, name: string, role: UserRole) => {
-    const existingUser = await storageService.findUserByEmail(email);
-    if (existingUser) {
-      return { success: false, errorType: 'ALREADY_EXISTS' as const };
-    }
+    try {
+      const existingUser = await storageService.findUserByEmail(email);
+      if (existingUser) {
+        return { success: false, errorType: 'ALREADY_EXISTS' as const };
+      }
 
-    const newUser: User = {
-      id: 'u-' + Math.random().toString(36).substr(2, 9),
-      name: name || email.split('@')[0].toUpperCase(),
-      email: email.toLowerCase(),
-      phone: '',
-      role: role,
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
-      bookmarks: [],
-      isEmailVerified: false
-    };
-    
-    await storageService.insertOneUser(newUser);
-    setUser(newUser);
-    localStorage.setItem('taxmitra_session_user', JSON.stringify(newUser));
-    
-    if (role === UserRole.CA || role === UserRole.ACCOUNTANT) {
-      notify(`Account created! Professional onboarding required.`, 'info');
-    } else {
-      notify(`Account created successfully! Welcome.`, 'success');
+      const newUser: User = {
+        id: 'u-' + Math.random().toString(36).substr(2, 9),
+        name: name || email.split('@')[0].toUpperCase(),
+        email: email.toLowerCase(),
+        phone: '',
+        role: role,
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
+        bookmarks: [],
+        isEmailVerified: false
+      };
+      
+      await storageService.insertOneUser(newUser);
+      setUser(newUser);
+      localStorage.setItem('taxmitra_session_user', JSON.stringify(newUser));
+      
+      if (role === UserRole.CA || role === UserRole.ACCOUNTANT) {
+        notify(`Account created! Professional onboarding required.`, 'info');
+      } else {
+        notify(`Account created successfully! Welcome.`, 'success');
+      }
+      
+      return { success: true };
+    } catch (err) {
+      console.error('Signup error:', err);
+      notify('Unable to create account right now.', 'error');
+      return { success: false, errorType: 'SERVER_ERROR' as const };
     }
-    
-    return { success: true };
   };
 
   const verifyEmail = async (caId: string): Promise<boolean> => {
     if (!user) return false;
     await new Promise(r => setTimeout(r, 1200));
 
-    const updatedUser = await storageService.updateOneUser(user.id, { isEmailVerified: true });
-    if (updatedUser) {
-      setUser(updatedUser);
-      localStorage.setItem('taxmitra_session_user', JSON.stringify(updatedUser));
-    }
-
-    if (user.role === UserRole.CA || user.role === UserRole.ACCOUNTANT) {
-      const profile = await storageService.findProfileById(caId);
-      if (profile) {
-        await storageService.updateOneProfile(caId, { verificationStatus: 'pending_admin_approval' });
-        return true;
+    try {
+      const updatedUser = await storageService.updateOneUser(user.id, { isEmailVerified: true });
+      if (updatedUser) {
+        setUser(updatedUser);
+        localStorage.setItem('taxmitra_session_user', JSON.stringify(updatedUser));
       }
+
+      if (user.role === UserRole.CA || user.role === UserRole.ACCOUNTANT) {
+        const profile = await storageService.findProfileById(caId);
+        if (profile) {
+          await storageService.updateOneProfile(caId, { verificationStatus: 'pending_admin_approval' });
+          return true;
+        }
+      }
+      return true;
+    } catch (e) {
+      return false;
     }
-    return true;
   };
 
   const logout = () => {
@@ -160,7 +186,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const updated = await storageService.updateOneUser(user.id, data);
       if (updated) {
-        // Synchronize avatar to Professional Profile if applicable
         if (data.avatar && (user.role === UserRole.CA || user.role === UserRole.ACCOUNTANT)) {
           const profile = await storageService.findProfileByUserId(user.id);
           if (profile) {
@@ -174,13 +199,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (err: any) {
       console.error('Update failed:', err);
-      // More descriptive error handling for server limits
       if (err.message?.includes('413')) {
-        notify('Network limit exceeded. The compressed image is still too large. Try a different photo.', 'error');
+        notify('Network limit exceeded. Try a smaller file.', 'error');
       } else {
         notify('Update failed. Please check your network connection.', 'error');
       }
-      throw err; // Propagate to component to stop loading states
+      throw err;
     }
   };
 
@@ -194,12 +218,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (index > -1) bookmarks.splice(index, 1);
     else bookmarks.push(caId);
     
-    const updated = await storageService.updateOneUser(user.id, { bookmarks });
-    if (updated) {
-      setUser(updated);
-      localStorage.setItem('taxmitra_session_user', JSON.stringify(updated));
-      notify(bookmarks.includes(caId) ? 'Added to bookmarks' : 'Removed from bookmarks', 'success');
-    }
+    try {
+      const updated = await storageService.updateOneUser(user.id, { bookmarks });
+      if (updated) {
+        setUser(updated);
+        localStorage.setItem('taxmitra_session_user', JSON.stringify(updated));
+        notify(bookmarks.includes(caId) ? 'Added to bookmarks' : 'Removed from bookmarks', 'success');
+      }
+    } catch (e) {}
   };
 
   return (

@@ -1,0 +1,7 @@
+{
+  "name": "TaxMitra - India's Trusted Expert Network",
+  "description": "A comprehensive platform connecting individuals and businesses with verified Chartered Accountants and Professional Accountants across India.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
